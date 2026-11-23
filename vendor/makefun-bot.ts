@@ -1,34 +1,24 @@
-// Minimal bot shim for agent-fun/replay/v2 (pump.fun paper-trading replay), Node 22.
-// Zero dependencies, erasable TypeScript: the grader runs `node /bot/main.ts` and
-// Node strips the types. It owns the wire only: it reads one JSON line at a time
-// from stdin (hello, batch, done), keeps `state` current (account, positions, every
-// curve's latest reserves, orders still in flight), calls onBatch once per batch
-// and writes exactly one reply per batch, echoing the batch's seq.
+// Wire shim for agent-fun/replay/v2 (pump.fun paper-trading replay), Node 22.
+// Zero dependencies, erasable TypeScript: the grader runs `node /bot/main.ts`
+// and Node strips the types. It speaks the protocol on stdin/stdout: one JSON
+// line in per batch (hello, batch, done), one reply line out per batch. It keeps
+// the bot's view of the world current — cash, positions, each curve's latest
+// reserves, orders still in flight — and hands that view to onBatch.
 //
-// Determinism: an entry is executed twice and the two action logs must match byte
-// for byte, so a strategy must never read the clock, the environment or Math.random;
-// seed any randomness from state.hello.seed. Diagnostics go to stderr: stdout
-// carries replies only.
+// stdout carries replies only; diagnostics go to stderr. Determinism matters:
+// the entry runs twice and the two action logs must match byte for byte, so a
+// strategy must never read the clock, the environment or Math.random; the only
+// randomness allowed is seeded from hello.seed.
 
 export const PROTOCOL = 'agent-fun/replay/v2';
-export const MAX_HARNESS_LINE_BYTES = 1_048_576;
-export const MAX_BOT_LINE_BYTES = 65_536;
-export const PUMP_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 export const LAMPORTS_PER_SOL = 1_000_000_000n;
 export const BPS = 10_000n;
-export const U64_MAX = 18_446_744_073_709_551_615n;
+const U64_MAX = 18_446_744_073_709_551_615n;
+const MAX_LINE = 1_048_576;
+const MAX_REPLY = 65_536;
 
 export type U64 = string;
-export type I64 = string;
 export type Pubkey = string;
-
-export interface Universe {
-  program: typeof PUMP_PROGRAM_ID;
-  quote: 'SOL';
-  mayhem: 'excluded';
-  exclude_cashback: true;
-  sample: { hash: 'sha256'; modulus: number; residue: number };
-}
 
 export interface Caps {
   max_open_positions: number;
@@ -38,105 +28,67 @@ export interface Caps {
   leverage: false;
 }
 
-export interface Fees {
-  protocol_bps_fallback: number;
-  creator_bps_fallback: number;
-  base_fee_lamports: U64;
-  priority_fee_lamports: U64;
-  failed_tx_bps: number;
-}
-
 export interface Hello {
   type: 'hello';
   protocol: typeof PROTOCOL;
   seed: U64;
-  universe: Universe;
+  universe: {
+    program: string;
+    quote: 'SOL';
+    mayhem: 'excluded';
+    exclude_cashback: true;
+    sample: { hash: 'sha256'; modulus: number; residue: number };
+  };
   capital: { lamports: U64 };
   caps: Caps;
   latency_slots: number;
-  fees: Fees;
+  fees: {
+    protocol_bps_fallback: number;
+    creator_bps_fallback: number;
+    base_fee_lamports: U64;
+    priority_fee_lamports: U64;
+    failed_tx_bps: number;
+  };
 }
 
-export interface ChainMeta {
-  slot: number;
-  signature: string;
-  block_time: number | null;
-  chain_seq: number;
-}
-
-export interface TradeEventRecord extends ChainMeta {
+export interface TradeEvent {
   event: 'TradeEvent';
+  slot: number;
+  block_time: number | null;
   mint: Pubkey;
   sol_amount: U64;
   token_amount: U64;
   is_buy: boolean;
   user: Pubkey;
-  timestamp: I64;
-  virtual_sol_reserves: U64;
-  virtual_token_reserves: U64;
-  real_sol_reserves: U64;
-  real_token_reserves: U64;
-  fee_recipient: Pubkey;
-  fee_basis_points: U64;
-  fee: U64;
   creator: Pubkey;
-  creator_fee_basis_points: U64;
-  creator_fee: U64;
-  track_volume: boolean;
-  total_unclaimed_tokens: U64;
-  total_claimed_tokens: U64;
-  current_sol_volume: U64;
-  last_update_timestamp: I64;
-  ix_name: string;
-  mayhem_mode: boolean;
-  cashback_fee_basis_points: U64;
-  cashback: U64;
-  buyback_fee_basis_points: U64;
-  buyback_fee: U64;
-  shareholders: { address: Pubkey; share_bps: number }[];
-  quote_mint: Pubkey;
-  quote_amount: U64;
   virtual_quote_reserves: U64;
+  virtual_token_reserves: U64;
   real_quote_reserves: U64;
-  holder_rewards_bps: U64;
-  holder_rewards: U64;
-  creator_fee_unclaimed: U64;
+  real_token_reserves: U64;
+  fee_basis_points: U64;
+  creator_fee_basis_points: U64;
 }
 
-export interface CreateEventRecord extends ChainMeta {
+export interface CreateEvent {
   event: 'CreateEvent';
-  name: string;
-  symbol: string;
-  uri: string;
+  slot: number;
+  block_time: number | null;
   mint: Pubkey;
-  bonding_curve: Pubkey;
   user: Pubkey;
   creator: Pubkey;
-  timestamp: I64;
-  virtual_token_reserves: U64;
-  virtual_sol_reserves: U64;
-  real_token_reserves: U64;
-  token_total_supply: U64;
-  token_program: Pubkey;
-  is_mayhem_mode: boolean;
-  is_cashback_enabled: boolean;
-  quote_mint: Pubkey;
   virtual_quote_reserves: U64;
-  creator_fee_bps: U64;
-  is_holder_reward: boolean;
-  depth: number;
+  virtual_token_reserves: U64;
+  real_token_reserves: U64;
 }
 
-export interface CompleteEventRecord extends ChainMeta {
+export interface CompleteEvent {
   event: 'CompleteEvent';
-  user: Pubkey;
+  slot: number;
+  block_time: number | null;
   mint: Pubkey;
-  bonding_curve: Pubkey;
-  timestamp: I64;
-  quote_mint: Pubkey;
 }
 
-export type ChainEvent = TradeEventRecord | CreateEventRecord | CompleteEventRecord;
+export type ChainEvent = TradeEvent | CreateEvent | CompleteEvent;
 
 export interface Mark {
   mint: Pubkey;
@@ -147,40 +99,12 @@ export interface Mark {
   real_quote_reserves: U64;
 }
 
-export interface Position {
-  mint: Pubkey;
-  token_amount: U64;
-  cost_lamports: U64;
-}
-
-export interface Account {
-  cash_lamports: U64;
-  positions: Position[];
-}
-
-export type Side = 'buy' | 'sell';
-
-export const REJECT_REASONS = [
-  'max_slippage',
-  'max_open_positions',
-  'max_order_size',
-  'max_orders_per_batch',
-  'insufficient_cash',
-  'insufficient_tokens',
-  'not_in_universe',
-  'token_complete',
-  'zero_amount',
-  'duplicate_client_id',
-  'after_end',
-] as const;
-export type RejectReason = (typeof REJECT_REASONS)[number];
-
 export interface Fill {
   client_id: string;
   mint: Pubkey;
-  side: Side;
+  side: 'buy' | 'sell';
   status: 'filled' | 'rejected' | 'failed';
-  reason: RejectReason | null;
+  reason: string | null;
   decided_slot: number;
   slot: number;
   quote_lamports: U64;
@@ -197,40 +121,14 @@ export interface Batch {
   events: ChainEvent[];
   marks: Mark[];
   fills: Fill[];
-  account: Account;
+  account: { cash_lamports: U64; positions: { mint: Pubkey; token_amount: U64; cost_lamports: U64 }[] };
 }
 
 export interface Done {
   type: 'done';
   seq: number;
   reason: 'end_of_data' | 'aborted';
-  account: Account;
-}
-
-export type HarnessMessage = Hello | Batch | Done;
-
-export interface BuyOrder {
-  side: 'buy';
-  client_id: string;
-  mint: Pubkey;
-  quote_lamports: U64;
-  max_slippage_bps: number;
-}
-
-export interface SellOrder {
-  side: 'sell';
-  client_id: string;
-  mint: Pubkey;
-  token_amount: U64;
-  max_slippage_bps: number;
-}
-
-export type Order = BuyOrder | SellOrder;
-
-export interface Reply {
-  type: 'reply';
-  seq: number;
-  orders: Order[];
+  account: Batch['account'];
 }
 
 export type Amount = bigint | string | number;
@@ -253,422 +151,285 @@ export interface SellInput {
 
 export type OrderInput = BuyInput | SellInput;
 
-export class ProtocolError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ProtocolError';
-  }
-}
-
-export class OrderError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'OrderError';
-  }
-}
-
-export interface Curve {
-  readonly mint: Pubkey;
-  created_slot: number | null;
-  virtual_token_reserves: bigint;
-  virtual_quote_reserves: bigint;
-  real_token_reserves: bigint;
-  real_quote_reserves: bigint;
-  reserves_slot: number;
-  trades: number;
-  complete: boolean;
-}
-
-export interface Holding {
-  token_amount: bigint;
-  cost_lamports: bigint;
-}
-
-export interface PendingOrder {
-  readonly order: Order;
-  readonly seq: number;
-  readonly decided_slot: number;
-}
-
-const U64_RE = /^(0|[1-9][0-9]{0,19})$/;
-const PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const CLIENT_ID_RE = /^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/;
-
-/**
- * Everything the bot knows, kept current by runBot before each callback.
- * Drive it yourself to unit-test a strategy:
- * `const s = new BotState(hello); s.applyBatch(batch); onBatch(s, batch)`.
- */
-export class BotState {
-  readonly hello: Hello;
-  seq = -1;
-  slot = -1;
-  account: Account;
+export interface BotState {
+  hello: Hello;
+  seq: number;
+  slot: number;
   cash: bigint;
-  readonly positions = new Map<Pubkey, Holding>();
-  readonly curves = new Map<Pubkey, Curve>();
-  readonly pending = new Map<string, PendingOrder>();
-  #used = new Set<string>();
-  #next = 1;
-
-  constructor(hello: Hello) {
-    this.hello = hello;
-    this.account = { cash_lamports: hello.capital.lamports, positions: [] };
-    this.cash = BigInt(hello.capital.lamports);
-  }
-
-  clientId(): string {
-    const id = this.#freeId(null);
-    this.#used.add(id);
-    return id;
-  }
-
-  /** Base + priority fee every sent order pays, filled or not. */
-  txFeeLamports(): bigint {
-    return BigInt(this.hello.fees.base_fee_lamports) + BigInt(this.hello.fees.priority_fee_lamports);
-  }
-
-  /**
-   * The size cap on this mint now: the most this batch's buys on it may spend
-   * together; 0n when unknown or complete.
-   */
-  maxBuyLamports(mint: Pubkey): bigint {
-    const c = this.curves.get(mint);
-    if (c === undefined || c.complete) return 0n;
-    return (c.real_quote_reserves * BigInt(this.hello.caps.max_order_bps_of_real_reserve)) / BPS;
-  }
-
-  /** Mints held plus mints with a buy pending: what counts against max_open_positions. */
-  committedPositionCount(): number {
-    const mints = new Set<Pubkey>(this.positions.keys());
-    for (const p of this.pending.values()) if (p.order.side === 'buy') mints.add(p.order.mint);
-    return mints.size;
-  }
-
-  /** Cash minus what pending orders will take if they fill (buy amounts and every tx fee). */
-  freeCashLamports(): bigint {
-    const tx = this.txFeeLamports();
-    let free = this.cash;
-    for (const p of this.pending.values()) {
-      free -= tx;
-      if (p.order.side === 'buy') free -= BigInt(p.order.quote_lamports);
+  positions: Map<Pubkey, { token_amount: bigint; cost_lamports: bigint }>;
+  curves: Map<
+    Pubkey,
+    {
+      mint: Pubkey;
+      created_slot: number | null;
+      virtual_token_reserves: bigint;
+      virtual_quote_reserves: bigint;
+      real_token_reserves: bigint;
+      real_quote_reserves: bigint;
+      reserves_slot: number;
+      trades: number;
+      complete: boolean;
     }
-    return free;
-  }
-
-  /** Fold a batch in: its fills, account, marks and events (in that order). */
-  applyBatch(batch: Batch): void {
-    this.seq = batch.seq;
-    this.slot = batch.slot;
-    for (const f of batch.fills) this.pending.delete(f.client_id);
-    this.#setAccount(batch.account);
-    for (const m of batch.marks) {
-      const c = this.curves.get(m.mint);
-      if (c !== undefined && m.slot < c.reserves_slot) continue;
-      const curve = c ?? this.#newCurve(m.mint, null, m.slot);
-      curve.virtual_token_reserves = BigInt(m.virtual_token_reserves);
-      curve.virtual_quote_reserves = BigInt(m.virtual_quote_reserves);
-      curve.real_token_reserves = BigInt(m.real_token_reserves);
-      curve.real_quote_reserves = BigInt(m.real_quote_reserves);
-      curve.reserves_slot = m.slot;
-    }
-    for (const e of batch.events) {
-      if (e.event === 'CreateEvent') {
-        const curve = this.#newCurve(e.mint, e.slot, e.slot);
-        curve.virtual_token_reserves = BigInt(e.virtual_token_reserves);
-        curve.virtual_quote_reserves = BigInt(e.virtual_quote_reserves);
-        curve.real_token_reserves = BigInt(e.real_token_reserves);
-        curve.real_quote_reserves = 0n;
-      } else if (e.event === 'TradeEvent') {
-        const curve = this.curves.get(e.mint) ?? this.#newCurve(e.mint, null, e.slot);
-        curve.virtual_token_reserves = BigInt(e.virtual_token_reserves);
-        curve.virtual_quote_reserves = BigInt(e.virtual_quote_reserves);
-        curve.real_token_reserves = BigInt(e.real_token_reserves);
-        curve.real_quote_reserves = BigInt(e.real_quote_reserves);
-        curve.reserves_slot = e.slot;
-        curve.trades += 1;
-      } else {
-        const curve = this.curves.get(e.mint) ?? this.#newCurve(e.mint, null, e.slot);
-        curve.complete = true;
-      }
-    }
-  }
-
-  applyDone(done: Done): void {
-    this.seq = done.seq;
-    this.#setAccount(done.account);
-  }
-
-  /**
-   * Validate what onBatch returned and turn it into wire orders (assigning
-   * missing client_ids). Throws OrderError on anything the harness would call a
-   * protocol violation, and on more orders than max_orders_per_batch.
-   */
-  toOrders(result: unknown): Order[] {
-    if (result === undefined || result === null) return [];
-    if (!Array.isArray(result)) throw new OrderError(`batch ${this.seq}: onBatch must return an array of orders, got ${describe(result)}`);
-    const cap = this.hello.caps.max_orders_per_batch;
-    if (result.length > cap) {
-      throw new OrderError(
-        `batch ${this.seq}: onBatch returned ${result.length} orders, over hello.caps.max_orders_per_batch (${cap})`,
-      );
-    }
-    const checked = result.map((o: unknown, i: number) => checkOrder(o, `batch ${this.seq} order ${i}`));
-    const taken = new Set<string>();
-    for (const o of checked) if (o.client_id !== undefined) taken.add(o.client_id);
-    return checked.map((o) => {
-      const client_id = o.client_id ?? this.#freeId(taken);
-      taken.add(client_id);
-      return o.side === 'buy'
-        ? { side: 'buy', client_id, mint: o.mint, quote_lamports: o.amount, max_slippage_bps: o.max_slippage_bps }
-        : { side: 'sell', client_id, mint: o.mint, token_amount: o.amount, max_slippage_bps: o.max_slippage_bps };
-    });
-  }
-
-  recordOrders(orders: readonly Order[]): void {
-    for (const order of orders) {
-      this.#used.add(order.client_id);
-      this.pending.set(order.client_id, { order, seq: this.seq, decided_slot: this.slot });
-    }
-  }
-
-  #freeId(taken: Set<string> | null): string {
-    for (;;) {
-      const id = `o${this.#next++}`;
-      if (!this.#used.has(id) && (taken === null || !taken.has(id))) return id;
-    }
-  }
-
-  #newCurve(mint: Pubkey, created: number | null, slot: number): Curve {
-    const curve: Curve = {
-      mint,
-      created_slot: created,
-      virtual_token_reserves: 0n,
-      virtual_quote_reserves: 0n,
-      real_token_reserves: 0n,
-      real_quote_reserves: 0n,
-      reserves_slot: slot,
-      trades: 0,
-      complete: false,
-    };
-    this.curves.set(mint, curve);
-    return curve;
-  }
-
-  #setAccount(account: Account): void {
-    this.account = account;
-    this.cash = BigInt(account.cash_lamports);
-    this.positions.clear();
-    for (const p of account.positions) {
-      const tokens = BigInt(p.token_amount);
-      if (tokens > 0n) this.positions.set(p.mint, { token_amount: tokens, cost_lamports: BigInt(p.cost_lamports) });
-    }
-  }
+  >;
+  pending: Map<string, { order: { side: 'buy' | 'sell'; client_id: string; mint: Pubkey; quote_lamports?: U64; token_amount?: U64; max_slippage_bps: number }; seq: number; decided_slot: number }>;
+  txFeeLamports(): bigint;
+  maxBuyLamports(mint: Pubkey): bigint;
+  committedPositionCount(): number;
+  freeCashLamports(): bigint;
+  applyBatch(batch: Batch): void;
+  applyDone(done: Done): void;
+  toOrders(result: unknown): { side: 'buy' | 'sell'; client_id: string; mint: Pubkey; quote_lamports: U64; token_amount: U64; max_slippage_bps: number }[];
+  recordOrders(orders: readonly { client_id: string }[]): void;
 }
-
-interface CheckedOrder {
-  side: Side;
-  client_id: string | undefined;
-  mint: Pubkey;
-  amount: U64;
-  max_slippage_bps: number;
-}
-
-const BUY_KEYS = new Set(['side', 'client_id', 'mint', 'quote_lamports', 'max_slippage_bps']);
-const SELL_KEYS = new Set(['side', 'client_id', 'mint', 'token_amount', 'max_slippage_bps']);
-
-function checkOrder(value: unknown, where: string): CheckedOrder {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new OrderError(`${where}: expected an order object, got ${describe(value)}`);
-  const o = value as Record<string, unknown>;
-  if (o.side !== 'buy' && o.side !== 'sell') throw new OrderError(`${where}: side must be "buy" or "sell", got ${describe(o.side)}`);
-  const allowed = o.side === 'buy' ? BUY_KEYS : SELL_KEYS;
-  for (const k of Object.keys(o)) {
-    if (!allowed.has(k)) throw new OrderError(`${where}: unknown key "${k}" on a ${o.side} order`);
-  }
-  if (typeof o.mint !== 'string' || !PUBKEY_RE.test(o.mint)) throw new OrderError(`${where}: mint must be a base58 address, got ${describe(o.mint)}`);
-  const amountKey = o.side === 'buy' ? 'quote_lamports' : 'token_amount';
-  const amount = toU64(o[amountKey], `${where}: ${amountKey}`);
-  const bps = o.max_slippage_bps;
-  if (typeof bps !== 'number' || !Number.isInteger(bps) || bps < 0 || bps > 10_000) {
-    throw new OrderError(`${where}: max_slippage_bps must be an integer 0..10000, got ${describe(bps)}`);
-  }
-  let client_id: string | undefined;
-  if (o.client_id !== undefined) {
-    if (typeof o.client_id !== 'string' || !CLIENT_ID_RE.test(o.client_id)) {
-      throw new OrderError(`${where}: client_id must be 1-64 of [A-Za-z0-9_-] not starting with _, got ${describe(o.client_id)}`);
-    }
-    client_id = o.client_id;
-  }
-  return { side: o.side, client_id, mint: o.mint, amount, max_slippage_bps: bps };
-}
-
-export function toU64(value: unknown, what = 'amount'): U64 {
-  let n: bigint | null = null;
-  if (typeof value === 'bigint') n = value;
-  else if (typeof value === 'number' && Number.isSafeInteger(value)) n = BigInt(value);
-  else if (typeof value === 'string' && U64_RE.test(value)) n = BigInt(value);
-  if (n === null || n < 0n || n > U64_MAX) {
-    throw new OrderError(`${what} must be a u64 (bigint, decimal string or safe integer), got ${describe(value)}`);
-  }
-  return n.toString();
-}
-
-function describe(value: unknown): string {
-  if (typeof value === 'bigint') return `${value}n`;
-  if (typeof value === 'string') return JSON.stringify(value.length > 80 ? `${value.slice(0, 77)}...` : value);
-  if (value === null || typeof value !== 'object') return String(value);
-  return Array.isArray(value) ? 'an array' : 'an object';
-}
-
-export async function* readLines(input: AsyncIterable<Uint8Array | string>, maxBytes = MAX_HARNESS_LINE_BYTES): AsyncGenerator<string> {
-  const encoder = new TextEncoder();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  let parts: Uint8Array[] = [];
-  let size = 0;
-  let lineNo = 0;
-  const take = (last: Uint8Array): string => {
-    let bytes: Uint8Array = last;
-    if (parts.length > 0) {
-      bytes = new Uint8Array(size);
-      let at = 0;
-      for (const p of [...parts, last]) {
-        bytes.set(p, at);
-        at += p.byteLength;
-      }
-    }
-    parts = [];
-    size = 0;
-    lineNo++;
-    if (bytes.byteLength > 0 && bytes[bytes.byteLength - 1] === 0x0d) bytes = bytes.subarray(0, bytes.byteLength - 1);
-    try {
-      return decoder.decode(bytes);
-    } catch {
-      throw new ProtocolError(`input line ${lineNo} is not valid UTF-8`);
-    }
-  };
-  const tooLong = (n: number) => new ProtocolError(`input line ${lineNo + 1} is over ${maxBytes} bytes (${n} so far)`);
-  for await (const chunk of input) {
-    const bytes = typeof chunk === 'string' ? encoder.encode(chunk) : chunk;
-    let start = 0;
-    for (;;) {
-      const nl = bytes.indexOf(0x0a, start);
-      if (nl === -1) break;
-      const piece = bytes.subarray(start, nl);
-      if (size + piece.byteLength > maxBytes) throw tooLong(size + piece.byteLength);
-      size += piece.byteLength;
-      yield take(piece);
-      start = nl + 1;
-    }
-    if (start < bytes.byteLength) {
-      const rest = new Uint8Array(bytes.subarray(start));
-      size += rest.byteLength;
-      if (size > maxBytes) throw tooLong(size);
-      parts.push(rest);
-    }
-  }
-  if (size > 0) yield take(new Uint8Array(0));
-}
-
-export interface LineWriter {
-  write(chunk: string): unknown;
-  once?(event: 'drain', listener: () => void): unknown;
-}
-
-export interface BotIO {
-  input?: AsyncIterable<Uint8Array | string>;
-  output?: LineWriter;
-}
-
-export type OrdersResult = readonly OrderInput[] | void | null | undefined;
 
 export interface Bot {
   onHello?(state: BotState): void | Promise<void>;
-  onBatch(state: BotState, batch: Batch): OrdersResult | Promise<OrdersResult>;
+  onBatch(state: BotState, batch: Batch): readonly OrderInput[] | void | null | undefined | Promise<readonly OrderInput[] | void | null | undefined>;
   onDone?(state: BotState, done: Done): void | Promise<void>;
 }
 
-export interface RunResult {
-  state: BotState;
-  done: Done;
-  batches: number;
+class BadWire extends Error {}
+class BadOrder extends Error {}
+
+const U64_RE = /^(0|[1-9][0-9]{0,19})$/;
+const ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const ID_RE = /^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/;
+
+function asU64(v: unknown, what: string): U64 {
+  let n: bigint | null = null;
+  if (typeof v === 'bigint') n = v;
+  else if (typeof v === 'number' && Number.isSafeInteger(v)) n = BigInt(v);
+  else if (typeof v === 'string' && U64_RE.test(v)) n = BigInt(v);
+  if (n === null || n < 0n || n > U64_MAX) throw new BadOrder(`${what} must be a u64, got ${String(v)}`);
+  return n.toString();
 }
 
-/**
- * Speak agent-fun/replay/v2 on stdin/stdout until done, then stop reading and
- * resolve (the process exits once stdout drains, even when the harness keeps
- * stdin open). Rejects with ProtocolError, OrderError or whatever a callback
- * threw; unhandled, that ends the process with exit code 1.
- */
-export async function runBot(bot: Bot, io: BotIO = {}): Promise<RunResult> {
+function checkOne(o: unknown, where: string): { side: 'buy' | 'sell'; client_id: string | undefined; mint: Pubkey; amount: U64; max_slippage_bps: number } {
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) throw new BadOrder(`${where}: expected an order object`);
+  const r = o as Record<string, unknown>;
+  if (r.side !== 'buy' && r.side !== 'sell') throw new BadOrder(`${where}: side must be buy or sell`);
+  const allowed = r.side === 'buy'
+    ? ['side', 'client_id', 'mint', 'quote_lamports', 'max_slippage_bps']
+    : ['side', 'client_id', 'mint', 'token_amount', 'max_slippage_bps'];
+  for (const k of Object.keys(r)) if (!allowed.includes(k)) throw new BadOrder(`${where}: unknown key "${k}"`);
+  if (typeof r.mint !== 'string' || !ADDR_RE.test(r.mint)) throw new BadOrder(`${where}: mint must be a base58 address`);
+  const key = r.side === 'buy' ? 'quote_lamports' : 'token_amount';
+  const amount = asU64(r[key], `${where}: ${key}`);
+  const bps = r.max_slippage_bps;
+  if (typeof bps !== 'number' || !Number.isInteger(bps) || bps < 0 || bps > 10_000) throw new BadOrder(`${where}: max_slippage_bps must be an integer 0..10000`);
+  let client_id: string | undefined;
+  if (r.client_id !== undefined) {
+    if (typeof r.client_id !== 'string' || !ID_RE.test(r.client_id)) throw new BadOrder(`${where}: client_id must be 1-64 of [A-Za-z0-9_-], not starting with _`);
+    client_id = r.client_id;
+  }
+  return { side: r.side, client_id, mint: r.mint, amount, max_slippage_bps: bps };
+}
+
+/** Build the per-run view the strategy sees. Plain object + closures. */
+function makeState(hello: Hello): BotState {
+  const used = new Set<string>();
+  let next = 1;
+  const freshId = (taken: Set<string> | null): string => {
+    for (;;) {
+      const id = `o${next++}`;
+      if (!used.has(id) && (taken === null || !taken.has(id))) return id;
+    }
+  };
+  const state: BotState = {
+    hello,
+    seq: -1,
+    slot: -1,
+    cash: BigInt(hello.capital.lamports),
+    positions: new Map(),
+    curves: new Map(),
+    pending: new Map(),
+    txFeeLamports(): bigint {
+      return BigInt(hello.fees.base_fee_lamports) + BigInt(hello.fees.priority_fee_lamports);
+    },
+    maxBuyLamports(mint: Pubkey): bigint {
+      const c = state.curves.get(mint);
+      if (c === undefined || c.complete) return 0n;
+      return (c.real_quote_reserves * BigInt(hello.caps.max_order_bps_of_real_reserve)) / BPS;
+    },
+    committedPositionCount(): number {
+      const mints = new Set<Pubkey>(state.positions.keys());
+      for (const p of state.pending.values()) if (p.order.side === 'buy') mints.add(p.order.mint);
+      return mints.size;
+    },
+    freeCashLamports(): bigint {
+      const tx = state.txFeeLamports();
+      let free = state.cash;
+      for (const p of state.pending.values()) {
+        free -= tx;
+        if (p.order.side === 'buy') free -= BigInt(p.order.quote_lamports ?? '0');
+      }
+      return free;
+    },
+    applyBatch(batch: Batch): void {
+      state.seq = batch.seq;
+      state.slot = batch.slot;
+      for (const f of batch.fills) state.pending.delete(f.client_id);
+      state.cash = BigInt(batch.account.cash_lamports);
+      state.positions.clear();
+      for (const p of batch.account.positions) {
+        const tokens = BigInt(p.token_amount);
+        if (tokens > 0n) state.positions.set(p.mint, { token_amount: tokens, cost_lamports: BigInt(p.cost_lamports) });
+      }
+      const upsert = (mint: Pubkey, slot: number) => {
+        let c = state.curves.get(mint);
+        if (c === undefined) {
+          c = { mint, created_slot: null, virtual_token_reserves: 0n, virtual_quote_reserves: 0n, real_token_reserves: 0n, real_quote_reserves: 0n, reserves_slot: slot, trades: 0, complete: false };
+          state.curves.set(mint, c);
+        }
+        return c;
+      };
+      for (const m of batch.marks) {
+        const c = state.curves.get(m.mint);
+        if (c !== undefined && m.slot < c.reserves_slot) continue;
+        const curve = upsert(m.mint, m.slot);
+        curve.virtual_token_reserves = BigInt(m.virtual_token_reserves);
+        curve.virtual_quote_reserves = BigInt(m.virtual_quote_reserves);
+        curve.real_token_reserves = BigInt(m.real_token_reserves);
+        curve.real_quote_reserves = BigInt(m.real_quote_reserves);
+        curve.reserves_slot = m.slot;
+      }
+      for (const e of batch.events) {
+        if (e.event === 'CreateEvent') {
+          const curve = upsert(e.mint, e.slot);
+          curve.created_slot = e.slot;
+          curve.virtual_token_reserves = BigInt(e.virtual_token_reserves);
+          curve.virtual_quote_reserves = BigInt(e.virtual_quote_reserves);
+          curve.real_token_reserves = BigInt(e.real_token_reserves);
+          curve.real_quote_reserves = 0n;
+          curve.reserves_slot = e.slot;
+        } else if (e.event === 'TradeEvent') {
+          const curve = upsert(e.mint, e.slot);
+          curve.virtual_token_reserves = BigInt(e.virtual_token_reserves);
+          curve.virtual_quote_reserves = BigInt(e.virtual_quote_reserves);
+          curve.real_token_reserves = BigInt(e.real_token_reserves);
+          curve.real_quote_reserves = BigInt(e.real_quote_reserves);
+          curve.reserves_slot = e.slot;
+          curve.trades += 1;
+        } else {
+          upsert(e.mint, e.slot).complete = true;
+        }
+      }
+    },
+    applyDone(done: Done): void {
+      state.seq = done.seq;
+      state.cash = BigInt(done.account.cash_lamports);
+      state.positions.clear();
+      for (const p of done.account.positions) {
+        const tokens = BigInt(p.token_amount);
+        if (tokens > 0n) state.positions.set(p.mint, { token_amount: tokens, cost_lamports: BigInt(p.cost_lamports) });
+      }
+    },
+    toOrders(result: unknown) {
+      if (result === undefined || result === null) return [];
+      if (!Array.isArray(result)) throw new BadOrder(`batch ${state.seq}: onBatch must return an array of orders`);
+      if (result.length > hello.caps.max_orders_per_batch) throw new BadOrder(`batch ${state.seq}: ${result.length} orders over the ${hello.caps.max_orders_per_batch} cap`);
+      const checked = result.map((o, i) => checkOne(o, `batch ${state.seq} order ${i}`));
+      const taken = new Set<string>();
+      for (const o of checked) if (o.client_id !== undefined) taken.add(o.client_id);
+      return checked.map((o) => {
+        const client_id = o.client_id ?? freshId(taken);
+        taken.add(client_id);
+        return o.side === 'buy'
+          ? { side: 'buy' as const, client_id, mint: o.mint, quote_lamports: o.amount, token_amount: '0', max_slippage_bps: o.max_slippage_bps }
+          : { side: 'sell' as const, client_id, mint: o.mint, quote_lamports: '0', token_amount: o.amount, max_slippage_bps: o.max_slippage_bps };
+      });
+    },
+    recordOrders(orders: readonly { client_id: string }[]): void {
+      for (const order of orders) {
+        used.add(order.client_id);
+        const full = order as { side: 'buy' | 'sell'; client_id: string; mint: Pubkey; quote_lamports: U64; token_amount: U64; max_slippage_bps: number };
+        state.pending.set(order.client_id, { order: full, seq: state.seq, decided_slot: state.slot });
+      }
+    },
+  };
+  return state;
+}
+
+/** Split stdin into lines without loading a whole line longer than MAX_LINE. */
+async function* lines(input: AsyncIterable<Uint8Array | string>): AsyncGenerator<string> {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder('utf-8', { fatal: true });
+  let buf = new Uint8Array(0);
+  const push = (chunk: Uint8Array): void => {
+    const merged = new Uint8Array(buf.length + chunk.length);
+    merged.set(buf, 0);
+    merged.set(chunk, buf.length);
+    buf = merged;
+  };
+  for await (const chunk of input) {
+    push(typeof chunk === 'string' ? enc.encode(chunk) : chunk);
+    for (;;) {
+      const nl = buf.indexOf(0x0a);
+      if (nl === -1) break;
+      if (nl > MAX_LINE) throw new BadWire(`input line over ${MAX_LINE} bytes`);
+      let line = buf.subarray(0, nl);
+      if (line.length > 0 && line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
+      buf = buf.subarray(nl + 1);
+      yield dec.decode(line);
+    }
+    if (buf.length > MAX_LINE) throw new BadWire(`input line over ${MAX_LINE} bytes`);
+  }
+  if (buf.length > 0) yield dec.decode(buf);
+}
+
+export async function runBot(bot: Bot, io: { input?: AsyncIterable<Uint8Array | string>; output?: { write(c: string): unknown; once?(e: 'drain', f: () => void): unknown } } = {}): Promise<{ state: BotState; done: Done; batches: number }> {
   const input = io.input ?? process.stdin;
   const output = io.output ?? process.stdout;
-  const encoder = new TextEncoder();
+  const enc = new TextEncoder();
   let state: BotState | null = null;
   let batches = 0;
   let lineNo = 0;
-  for await (const line of readLines(input)) {
+  for await (const line of lines(input)) {
     lineNo++;
     if (line.trim() === '') continue;
     let msg: unknown;
     try {
       msg = JSON.parse(line);
     } catch {
-      throw new ProtocolError(`input line ${lineNo} is not JSON`);
+      throw new BadWire(`input line ${lineNo} is not JSON`);
     }
     const type = typeof msg === 'object' && msg !== null && !Array.isArray(msg) ? (msg as { type?: unknown }).type : undefined;
     if (type === 'hello') {
       const hello = msg as Hello;
-      if (state !== null) throw new ProtocolError(`input line ${lineNo}: a second hello`);
-      if (hello.protocol !== PROTOCOL) throw new ProtocolError(`the harness speaks ${describe(hello.protocol)}; this shim speaks ${PROTOCOL}`);
-      state = new BotState(hello);
+      if (state !== null) throw new BadWire(`input line ${lineNo}: a second hello`);
+      if (hello.protocol !== PROTOCOL) throw new BadWire(`the harness speaks ${String((hello as { protocol?: unknown }).protocol)}; this shim speaks ${PROTOCOL}`);
+      state = makeState(hello);
       await bot.onHello?.(state);
     } else if (type === 'batch') {
       const batch = msg as Batch;
-      if (state === null) throw new ProtocolError(`input line ${lineNo}: a batch before hello`);
-      checkBatch(batch, lineNo);
+      if (state === null) throw new BadWire(`input line ${lineNo}: a batch before hello`);
+      const ok =
+        Number.isSafeInteger(batch.seq) &&
+        Number.isSafeInteger(batch.slot) &&
+        Array.isArray(batch.events) &&
+        Array.isArray(batch.marks) &&
+        Array.isArray(batch.fills) &&
+        typeof batch.account === 'object' &&
+        batch.account !== null &&
+        Array.isArray(batch.account.positions);
+      if (!ok) throw new BadWire(`input line ${lineNo}: malformed batch`);
       state.applyBatch(batch);
       const orders = state.toOrders(await bot.onBatch(state, batch));
-      const reply: Reply = { type: 'reply', seq: batch.seq, orders };
-      const text = JSON.stringify(reply);
-      const bytes = encoder.encode(text).byteLength;
-      if (bytes > MAX_BOT_LINE_BYTES) {
-        throw new OrderError(`batch ${batch.seq}: the reply is ${bytes} bytes (max ${MAX_BOT_LINE_BYTES})`);
-      }
+      const text = JSON.stringify({ type: 'reply', seq: batch.seq, orders: orders.map((o) => (o.side === 'buy' ? { side: 'buy', client_id: o.client_id, mint: o.mint, quote_lamports: o.quote_lamports, max_slippage_bps: o.max_slippage_bps } : { side: 'sell', client_id: o.client_id, mint: o.mint, token_amount: o.token_amount, max_slippage_bps: o.max_slippage_bps })) });
+      if (enc.encode(text).byteLength > MAX_REPLY) throw new BadOrder(`batch ${batch.seq}: the reply is over ${MAX_REPLY} bytes`);
       state.recordOrders(orders);
-      await writeLine(output, `${text}\n`);
+      const flushed = output.write(`${text}\n`);
+      if (flushed === false && typeof output.once === 'function') await new Promise<void>((resolve) => (output.once as (e: 'drain', f: () => void) => unknown)('drain', resolve));
       batches++;
     } else if (type === 'done') {
       const done = msg as Done;
-      if (state === null) throw new ProtocolError(`input line ${lineNo}: done before hello`);
+      if (state === null) throw new BadWire(`input line ${lineNo}: done before hello`);
       state.applyDone(done);
       await bot.onDone?.(state, done);
       return { state, done, batches };
     } else {
-      throw new ProtocolError(`input line ${lineNo}: unknown message type ${describe(type)}`);
+      throw new BadWire(`input line ${lineNo}: unknown message type ${String(type)}`);
     }
   }
-  throw new ProtocolError(state === null ? 'input ended before hello' : `input ended before done (after ${batches} batches)`);
-}
-
-function checkBatch(batch: Batch, lineNo: number): void {
-  const ok =
-    Number.isSafeInteger(batch.seq) &&
-    Number.isSafeInteger(batch.slot) &&
-    Array.isArray(batch.events) &&
-    Array.isArray(batch.marks) &&
-    Array.isArray(batch.fills) &&
-    typeof batch.account === 'object' &&
-    batch.account !== null &&
-    Array.isArray(batch.account.positions);
-  if (!ok) throw new ProtocolError(`input line ${lineNo}: malformed batch`);
-}
-
-function writeLine(output: LineWriter, text: string): Promise<void> | void {
-  const ok = output.write(text);
-  if (ok === false && typeof output.once === 'function') {
-    const once = output.once.bind(output);
-    return new Promise<void>((resolve) => {
-      once('drain', resolve);
-    });
-  }
+  throw new BadWire(state === null ? 'input ended before hello' : `input ended before done (after ${batches} batches)`);
 }
