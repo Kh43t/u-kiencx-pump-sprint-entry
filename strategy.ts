@@ -166,6 +166,9 @@ export function createStrategy(p: Params = DEFAULT_PARAMS): Bot {
   const held = new Map<Pubkey, Held>();
   /** Probe round trips in flight, by mint. */
   const probes = new Map<Pubkey, boolean>();
+  /** Coins already probed once — never probe the same coin twice: re-probing
+      a counted coin burns fees without moving the coin count. */
+  const probed = new Set<Pubkey>();
   let myFills = 0;
   const myCoins = new Set<Pubkey>();
   let firstTime: number | null = null;
@@ -401,12 +404,14 @@ export function createStrategy(p: Params = DEFAULT_PARAMS): Bot {
           for (const mint of traded) {
             if (orders.length >= cap || probes.size >= p.maxProbes) break;
             if (held.has(mint) || probes.has(mint) || pendingByMint.has(mint) || state.positions.has(mint)) continue;
+            if (probed.has(mint) || myCoins.has(mint)) continue;
             const curve = state.curves.get(mint);
             if (curve === undefined || curve.complete) continue;
             if (Number(curve.real_quote_reserves) / LAMPORTS < minRq * 1.5) continue;
             if (free < p.probeSol + 2 * tx) break;
             orders.push({ side: 'buy', mint, quote_lamports: BigInt(Math.floor(p.probeSol * LAMPORTS)), max_slippage_bps: p.buySlipBps });
             probes.set(mint, false);
+            probed.add(mint);
             free -= p.probeSol + tx;
           }
         }
